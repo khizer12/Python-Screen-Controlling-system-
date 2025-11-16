@@ -10,7 +10,8 @@ import socket
 import mss
 import numpy as np
 import av
-
+import logging
+logging.basicConfig(level=logging.DEBUG)
 # ========== CONFIGURATION ==========
 class StreamConfig:
     def __init__(self):
@@ -182,8 +183,9 @@ class HardwareEncoder:
     
     def stop_encoding(self):
         self.running = False
-        if self.codec_context:
-            self.codec_context.close()
+        # Don't call close() on codec_context - it doesn't exist
+        # The context will be garbage collected automatically
+        self.codec_context = None
 
 # ========== NETWORK ==========
 class Streamer:

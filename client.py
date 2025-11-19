@@ -246,121 +246,6 @@ class FFmpegVideoReceiver:
                     pass
         print("✅ FFmpeg receiver disconnected")
 
-# ========== SIMPLE FALLBACK RECEIVER ==========
-class SimpleVideoReceiver:
-    def __init__(self, config_manager):
-        self.config_manager = config_manager
-        self.connected = False
-        self.running = False
-        self.socket = None
-        self.frame_queue = queue.Queue(maxsize=2)
-        self.current_frame = None
-        self.fps = 0
-        self.frame_count = 0
-        self.fps_update_time = time.time()
-        self.on_frame_callback = None
-        
-        self.platform = platform.system().lower()
-    
-    def connect(self, host_ip: str) -> bool:
-        """Simple UDP connection for testing"""
-        try:
-            self.socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 1024 * 1024)
-            self.socket.settimeout(2.0)
-            self.socket.bind(('', self.config_manager.network_config.video_port))
-            
-            self.connected = True
-            self.running = True
-            
-            thread = threading.Thread(target=self._receive_loop, daemon=True)
-            thread.start()
-            
-            print(f"✅ Simple receiver started for {host_ip}")
-            return True
-            
-        except Exception as e:
-            print(f"❌ Simple connection failed: {e}")
-            return False
-    
-    def _receive_loop(self):
-        """Simple receive loop that shows connection status"""
-        while self.running and self.connected:
-            try:
-                data, addr = self.socket.recvfrom(65536)
-                
-                # Create a simple test frame to show we're connected
-                if CV2_AVAILABLE and self.frame_queue.empty():
-                    test_frame = self._create_test_frame()
-                    self.current_frame = test_frame
-                    
-                    # Update FPS
-                    self.frame_count += 1
-                    current_time = time.time()
-                    if current_time - self.fps_update_time >= 1.0:
-                        self.fps = min(self.frame_count, 30)
-                        self.frame_count = 0
-                        self.fps_update_time = current_time
-                    
-                    if self.on_frame_callback:
-                        self.on_frame_callback(test_frame)
-                    
-                    try:
-                        self.frame_queue.put_nowait(test_frame)
-                    except queue.Full:
-                        pass
-                
-            except socket.timeout:
-                continue
-            except Exception as e:
-                if self.running:
-                    print(f"Receive error: {e}")
-    
-    def _create_test_frame(self):
-        """Create a test frame to show we're connected"""
-        try:
-            # Create a simple colored frame with connection info
-            frame = np.zeros((480, 640, 3), dtype=np.uint8)
-            frame[:] = [50, 50, 150]  # Blue background
-            
-            # Add text
-            text = "SIMPLE UDP TEST MODE"
-            font = cv2.FONT_HERSHEY_SIMPLEX
-            cv2.putText(frame, text, (50, 100), font, 0.8, (255, 255, 255), 2)
-            cv2.putText(frame, "✅ Receiving UDP packets", (50, 150), font, 0.6, (255, 255, 255), 1)
-            cv2.putText(frame, "⚠️ Using simple receiver (no video)", (50, 200), font, 0.6, (255, 255, 255), 1)
-            cv2.putText(frame, "💡 Install FFmpeg for H.264 video", (50, 250), font, 0.6, (255, 255, 255), 1)
-            
-            return frame
-        except:
-            return None
-    
-    def get_frame(self):
-        try:
-            while not self.frame_queue.empty():
-                self.current_frame = self.frame_queue.get_nowait()
-            return self.current_frame
-        except:
-            return self.current_frame
-    
-    def get_stats(self):
-        return {
-            'fps': self.fps,
-            'connected': self.connected,
-            'decoder': 'test_mode',
-            'queue_size': self.frame_queue.qsize(),
-            'platform': self.platform
-        }
-    
-    def set_frame_callback(self, callback: Callable):
-        self.on_frame_callback = callback
-    
-    def disconnect(self):
-        self.running = False
-        self.connected = False
-        if self.socket:
-            self.socket.close()
-
 # ========== INPUT SENDER ==========
 class CrossPlatformInputSender:
     def __init__(self, control_port: int = 5556):
@@ -581,41 +466,22 @@ class VideoDisplay:
     def setup_display(self):
         """Setup Tkinter video display using grid"""
         self.frame = ttk.Frame(self.parent)
-        self.frame.grid(row=0, column=0, sticky="nsew")
-        
-        self.frame.grid_rowconfigure(0, weight=1)
-        self.frame.grid_columnconfigure(0, weight=1)
+        self.frame.pack(fill=tk.BOTH, expand=True)
         
         self.video_label = ttk.Label(
             self.frame, 
-            text="Enter host IP (e.g., 192.168.0.155) and click Connect",
+            text="Enter host IP and click Connect",
             background='black',
             foreground='white',
             font=('Arial', 12),
             anchor='center',
             justify='center'
         )
-        self.video_label.grid(row=0, column=0, sticky="nsew", padx=2, pady=2)
-        
-        self.status_frame = ttk.Frame(self.frame)
-        self.status_frame.grid(row=1, column=0, sticky="ew", padx=2, pady=2)
-        
-        self.fps_label = ttk.Label(self.status_frame, text="FPS: 0")
-        self.fps_label.pack(side=tk.LEFT, padx=5)
-        
-        self.connection_label = ttk.Label(self.status_frame, text="FFmpeg Receiver")
-        self.connection_label.pack(side=tk.LEFT, padx=5)
-        
-        platform_info = f"{platform.system()} {platform.release()}"
-        self.platform_label = ttk.Label(self.status_frame, text=platform_info)
-        self.platform_label.pack(side=tk.RIGHT, padx=5)
-        
-        self.status_frame.columnconfigure(0, weight=1)
+        self.video_label.pack(fill=tk.BOTH, expand=True, padx=2, pady=2)
     
     def update_frame(self, frame, stats):
         """Update the video display with new frame"""
         if frame is None or not CV2_AVAILABLE:
-            self._update_status(stats)
             return
         
         self._update_tkinter_frame(frame, stats)
@@ -639,23 +505,8 @@ class VideoDisplay:
             self.video_label.configure(image=imgtk, text="")
             self.video_label.image = imgtk
             
-            self._update_status(stats)
-            
         except Exception as e:
             print(f"Frame update error: {e}")
-    
-    def _update_status(self, stats):
-        """Update status labels"""
-        try:
-            self.fps_label.config(text=f"FPS: {stats.get('fps', 0)}")
-            
-            if stats.get('connected', False):
-                self.connection_label.config(text="🟢 Streaming", foreground="green")
-            else:
-                self.connection_label.config(text="🔴 Disconnected", foreground="red")
-                
-        except Exception as e:
-            print(f"Status update error: {e}")
     
     def show_connecting(self):
         """Show connecting state"""
@@ -674,7 +525,6 @@ class VideoDisplay:
             background='darkred',
             foreground='white'
         )
-        self.connection_label.config(text="🔴 Error", foreground="red")
 
 # ========== MAIN CLIENT GUI ==========
 class EdgeLiteClient:
@@ -689,6 +539,7 @@ class EdgeLiteClient:
             self.receiver = FFmpegVideoReceiver(self.config_manager)
             print("🔧 Using FFmpeg H.264 video receiver")
         else:
+            from SimpleVideoReceiver import SimpleVideoReceiver
             self.receiver = SimpleVideoReceiver(self.config_manager)
             print("🔧 Using simple video receiver (FFmpeg not available)")
             
@@ -697,12 +548,16 @@ class EdgeLiteClient:
         self.connected = False
         self.connection_start_time = 0
         self.host_ip = None
+        self.is_fullscreen = False
         
         self.root = None
         self.log_text = None
         self.connect_btn = None
         self.connection_status = None
         self.video_display = None
+        self.notebook = None
+        self.video_tab = None
+        self.controls_tab = None
         
         self.setup_gui()
         self.receiver.set_frame_callback(self.on_new_frame)
@@ -725,49 +580,32 @@ class EdgeLiteClient:
             return False
     
     def setup_gui(self):
-        """Setup the main client GUI using grid consistently"""
+        """Setup the main client GUI with tabs"""
         self.root = tk.Tk()
         self.root.title("EdgeLite Client - FFmpeg H.264")
-        self.root.geometry("800x600")
+        self.root.geometry("1024x768")
         
-        self.root.grid_rowconfigure(1, weight=1)
-        self.root.grid_rowconfigure(2, weight=0)
-        self.root.grid_columnconfigure(0, weight=1)
+        # Bind F11 for fullscreen toggle
+        self.root.bind('<F11>', self.toggle_fullscreen)
+        self.root.bind('<Escape>', self.exit_fullscreen)
         
-        control_frame = ttk.Frame(self.root, padding="10")
-        control_frame.grid(row=0, column=0, sticky="ew")
+        # Create notebook (tabbed interface)
+        self.notebook = ttk.Notebook(self.root)
+        self.notebook.pack(fill=tk.BOTH, expand=True)
         
-        ttk.Label(control_frame, text="Host IP:").grid(row=0, column=0, sticky="w", padx=(0, 5))
-        self.host_ip_var = tk.StringVar(value="127.0.0.1")  # Default to localhost for testing
-        ip_entry = ttk.Entry(control_frame, textvariable=self.host_ip_var, width=15)
-        ip_entry.grid(row=0, column=1, sticky="ew", padx=(0, 5))
+        # Video Tab
+        self.video_tab = ttk.Frame(self.notebook)
+        self.notebook.add(self.video_tab, text='Video')
         
-        self.connect_btn = ttk.Button(control_frame, text="Connect", command=self.toggle_connection)
-        self.connect_btn.grid(row=0, column=2, padx=(0, 5))
+        # Controls Tab
+        self.controls_tab = ttk.Frame(self.notebook)
+        self.notebook.add(self.controls_tab, text='Controls')
         
-        self.connection_status = ttk.Label(control_frame, text="🔴 DISCONNECTED", foreground="red", font=('Arial', 9, 'bold'))
-        self.connection_status.grid(row=0, column=3, padx=(10, 0))
+        # Setup video display in video tab
+        self.setup_video_tab()
         
-        control_frame.grid_columnconfigure(1, weight=1)
-        
-        video_container = ttk.Frame(self.root)
-        video_container.grid(row=1, column=0, sticky="nsew")
-        video_container.grid_rowconfigure(0, weight=1)
-        video_container.grid_columnconfigure(0, weight=1)
-        
-        self.video_display = VideoDisplay(video_container)
-        
-        log_frame = ttk.LabelFrame(self.root, text="Connection Log", padding="5")
-        log_frame.grid(row=2, column=0, sticky="ew", padx=10, pady=5)
-        log_frame.grid_columnconfigure(0, weight=1)
-        log_frame.grid_rowconfigure(0, weight=1)
-        
-        self.log_text = tk.Text(log_frame, height=6)
-        self.log_text.grid(row=0, column=0, sticky="nsew")
-        
-        log_scrollbar = ttk.Scrollbar(log_frame, orient="vertical", command=self.log_text.yview)
-        log_scrollbar.grid(row=0, column=1, sticky="ns")
-        self.log_text.configure(yscrollcommand=log_scrollbar.set)
+        # Setup controls in controls tab
+        self.setup_controls_tab()
         
         self.setup_platform_input()
         
@@ -785,6 +623,7 @@ class EdgeLiteClient:
         
         self.log("💡 Enter host IP and click Connect")
         self.log("💡 For testing, use 127.0.0.1 to connect to yourself")
+        self.log("💡 Press F11 to toggle fullscreen, ESC to exit fullscreen")
         
         if not CV2_AVAILABLE:
             self.log("❌ WARNING: OpenCV/PIL not installed - video display disabled")
@@ -792,6 +631,81 @@ class EdgeLiteClient:
         if not PYNPUT_AVAILABLE:
             self.log("❌ WARNING: pynput not installed - input forwarding disabled")
             self.log("   Install with: pip install pynput")
+    
+    def setup_video_tab(self):
+        """Setup the video tab with display and status"""
+        # Video display
+        self.video_display = VideoDisplay(self.video_tab)
+        
+        # Status frame at bottom of video tab
+        status_frame = ttk.Frame(self.video_tab)
+        status_frame.pack(fill=tk.X, side=tk.BOTTOM)
+        
+        self.fps_label = ttk.Label(status_frame, text="FPS: 0")
+        self.fps_label.pack(side=tk.LEFT, padx=5)
+        
+        self.connection_label = ttk.Label(status_frame, text="FFmpeg Receiver")
+        self.connection_label.pack(side=tk.LEFT, padx=5)
+        
+        platform_info = f"{platform.system()} {platform.release()}"
+        self.platform_label = ttk.Label(status_frame, text=platform_info)
+        self.platform_label.pack(side=tk.RIGHT, padx=5)
+        
+        # Fullscreen hint
+        fullscreen_label = ttk.Label(status_frame, text="F11: Fullscreen | ESC: Exit Fullscreen")
+        fullscreen_label.pack(side=tk.RIGHT, padx=5)
+    
+    def setup_controls_tab(self):
+        """Setup the controls tab with connection controls and log"""
+        # Connection controls
+        control_frame = ttk.LabelFrame(self.controls_tab, text="Connection", padding="10")
+        control_frame.pack(fill=tk.X, padx=10, pady=5)
+        
+        ttk.Label(control_frame, text="Host IP:").grid(row=0, column=0, sticky="w", padx=(0, 5))
+        self.host_ip_var = tk.StringVar(value="127.0.0.1")
+        ip_entry = ttk.Entry(control_frame, textvariable=self.host_ip_var, width=15)
+        ip_entry.grid(row=0, column=1, sticky="ew", padx=(0, 5))
+        
+        self.connect_btn = ttk.Button(control_frame, text="Connect", command=self.toggle_connection)
+        self.connect_btn.grid(row=0, column=2, padx=(0, 5))
+        
+        self.connection_status = ttk.Label(control_frame, text="🔴 DISCONNECTED", foreground="red", font=('Arial', 9, 'bold'))
+        self.connection_status.grid(row=0, column=3, padx=(10, 0))
+        
+        control_frame.columnconfigure(1, weight=1)
+        
+        # Settings frame
+        settings_frame = ttk.LabelFrame(self.controls_tab, text="Settings", padding="10")
+        settings_frame.pack(fill=tk.X, padx=10, pady=5)
+        
+        # Input control checkbox
+        self.input_enabled_var = tk.BooleanVar(value=True)
+        input_checkbox = ttk.Checkbutton(
+            settings_frame, 
+            text="Enable Input Control", 
+            variable=self.input_enabled_var,
+            command=self.toggle_input_control
+        )
+        input_checkbox.pack(anchor=tk.W)
+        
+        input_info = ttk.Label(
+            settings_frame, 
+            text="When enabled: Click the video display to control host computer",
+            foreground="gray",
+            font=('Arial', 8)
+        )
+        input_info.pack(anchor=tk.W, pady=(0, 5))
+        
+        # Log frame
+        log_frame = ttk.LabelFrame(self.controls_tab, text="Connection Log", padding="5")
+        log_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
+        
+        self.log_text = tk.Text(log_frame, height=10)
+        self.log_text.pack(fill=tk.BOTH, expand=True, side=tk.LEFT)
+        
+        log_scrollbar = ttk.Scrollbar(log_frame, orient="vertical", command=self.log_text.yview)
+        log_scrollbar.pack(fill=tk.Y, side=tk.RIGHT)
+        self.log_text.configure(yscrollcommand=log_scrollbar.set)
     
     def setup_platform_input(self):
         """Setup input forwarding with proper focus handling"""
@@ -804,22 +718,54 @@ class EdgeLiteClient:
             # Make video label focusable
             self.video_display.video_label.focus_set()
     
+    def toggle_input_control(self):
+        """Toggle input control on/off"""
+        if self.input_enabled_var.get():
+            self.log("✅ Input control enabled")
+            if self.connected:
+                self.input_sender.connect(self.host_ip)
+        else:
+            self.log("❌ Input control disabled")
+            self.input_sender.disconnect()
+    
     def on_video_click(self, event):
         """When video display is clicked, focus it"""
         self.video_display.video_label.focus_set()
-        self.log("🎯 Video display focused - input forwarding active")
+        if self.input_enabled_var.get():
+            self.log("🎯 Video display focused - input forwarding active")
         
     def on_video_focus(self, event):
         """When video display gets focus"""
-        if self.connected:
+        if self.connected and self.input_enabled_var.get():
             self.log("🎯 Video display focused - input forwarding active")
             self.log("🖱️  You can now control the host computer")
             self.log("💡 Click anywhere outside the video to release control")
     
     def on_video_blur(self, event):
         """When video display loses focus"""
-        if self.connected:
+        if self.connected and self.input_enabled_var.get():
             self.log("🎯 Video display unfocused - input forwarding inactive")
+    
+    def toggle_fullscreen(self, event=None):
+        """Toggle fullscreen mode"""
+        self.is_fullscreen = not self.is_fullscreen
+        self.root.attributes('-fullscreen', self.is_fullscreen)
+        
+        if self.is_fullscreen:
+            # Hide the notebook and show only video
+            self.notebook.pack_forget()
+            self.video_tab.pack(fill=tk.BOTH, expand=True)
+            self.log("📺 Entered fullscreen mode (Press ESC to exit)")
+        else:
+            # Show the notebook again
+            self.video_tab.pack_forget()
+            self.notebook.pack(fill=tk.BOTH, expand=True)
+            self.log("📺 Exited fullscreen mode")
+    
+    def exit_fullscreen(self, event=None):
+        """Exit fullscreen mode"""
+        if self.is_fullscreen:
+            self.toggle_fullscreen()
     
     def on_new_frame(self, frame):
         """Callback for new video frames"""
@@ -832,15 +778,20 @@ class EdgeLiteClient:
         if self.video_display:
             self.video_display.update_frame(frame, stats)
         
+        # Update status labels
+        self.fps_label.config(text=f"FPS: {stats.get('fps', 0)}")
+        
         if self.connected and stats['connected']:
             connection_time = time.time() - self.connection_start_time
             status_text = f"🟢 CONNECTED ({int(connection_time)}s)"
             self.connection_status.config(text=status_text, foreground="green")
+            self.connection_label.config(text="🟢 Streaming", foreground="green")
         else:
             if self.connected and not stats['connected']:
                 self.connected = False
                 self.connect_btn.config(text="Connect")
                 self.connection_status.config(text="🔴 CONNECTION LOST", foreground="red")
+                self.connection_label.config(text="🔴 Disconnected", foreground="red")
                 self.log("❌ Connection lost - video stream disconnected")
                 self.video_display.show_error("Connection lost")
     
@@ -904,19 +855,22 @@ class EdgeLiteClient:
                 stream_config.height
             )
             
-            # Start input sender
-            input_success = self.input_sender.connect(host_ip)
-            if input_success:
-                self.log("✅ Input control initialized")
-            else:
-                self.log("⚠️ Input control failed to start")
+            # Start input sender if enabled
+            if self.input_enabled_var.get():
+                input_success = self.input_sender.connect(host_ip)
+                if input_success:
+                    self.log("✅ Input control initialized")
+                else:
+                    self.log("⚠️ Input control failed to start")
             
             self.log(f"✅ Successfully connected to {host_ip}")
             if self.ffmpeg_available:
                 self.log("🔧 Using FFmpeg H.264 decoder")
             else:
                 self.log("🔧 Using simple UDP receiver")
-            self.log("🎯 Click the video display to start controlling the host")
+            
+            if self.input_enabled_var.get():
+                self.log("🎯 Click the video display to start controlling the host")
             self.log("📺 Waiting for video stream...")
             
         else:
@@ -945,6 +899,7 @@ class EdgeLiteClient:
         self.connected = False
         self.connect_btn.config(text="Connect")
         self.connection_status.config(text="🔴 DISCONNECTED", foreground="red")
+        self.connection_label.config(text="🔴 Disconnected", foreground="red")
         
         if self.video_display:
             self.video_display.video_label.configure(
@@ -991,6 +946,7 @@ class EdgeLiteClient:
                 self.connected = False
                 self.connect_btn.config(text="Connect")
                 self.connection_status.config(text="🔴 CONNECTION LOST", foreground="red")
+                self.connection_label.config(text="🔴 Disconnected", foreground="red")
                 self.log("❌ Connection lost with host")
         
         self.root.after(1000, self.update_stats)

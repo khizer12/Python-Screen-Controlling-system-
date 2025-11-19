@@ -374,8 +374,9 @@ class CrossPlatformInputSender:
         self.mouse_position = (0, 0)
         self.pressed_keys = set()
         
-        self.scale_x = 1.0
-        self.scale_y = 1.0
+        # Client display dimensions for scaling
+        self.client_width = 1920
+        self.client_height = 1080
         
         self.platform = platform.system().lower()
         self.input_enabled = PYNPUT_AVAILABLE
@@ -385,14 +386,13 @@ class CrossPlatformInputSender:
     
     def set_scaling(self, display_width: int, display_height: int, stream_width: int, stream_height: int):
         """Set scaling for coordinate conversion"""
-        self.scale_x = stream_width / display_width
-        self.scale_y = stream_height / display_height
+        self.client_width = display_width
+        self.client_height = display_height
     
     def _scale_coordinates(self, x: int, y: int) -> tuple:
         """Scale coordinates from display to stream resolution"""
-        scaled_x = int(x * self.scale_x)
-        scaled_y = int(y * self.scale_y)
-        return scaled_x, scaled_y
+        # No scaling needed - send raw coordinates and let host scale
+        return x, y
     
     def connect(self, host_ip: str):
         """Connect to host input receiver"""
@@ -439,6 +439,10 @@ class CrossPlatformInputSender:
         """Send input event to host"""
         if self.socket and self.host_ip and self.running:
             try:
+                # Add client display dimensions for scaling on host side
+                event_data['client_width'] = self.client_width
+                event_data['client_height'] = self.client_height
+                
                 data = json.dumps(event_data).encode('utf-8')
                 self.socket.sendto(data, (self.host_ip, self.control_port))
             except Exception as e:
@@ -450,13 +454,12 @@ class CrossPlatformInputSender:
             return
             
         self.mouse_position = (x, y)
-        scaled_x, scaled_y = self._scale_coordinates(x, y)
         
         event = {
             'type': 'mouse',
             'action': 'move',
-            'x': scaled_x,
-            'y': scaled_y,
+            'x': x,
+            'y': y,
             'timestamp': time.time()
         }
         self._send_input_event(event)
@@ -466,15 +469,14 @@ class CrossPlatformInputSender:
         if not self.running:
             return
             
-        scaled_x, scaled_y = self._scale_coordinates(x, y)
         button_name = str(button).replace('Button.', '')
         
         event = {
             'type': 'mouse',
             'action': 'press' if pressed else 'release',
             'button': button_name,
-            'x': scaled_x,
-            'y': scaled_y,
+            'x': x,
+            'y': y,
             'timestamp': time.time()
         }
         self._send_input_event(event)
@@ -484,12 +486,11 @@ class CrossPlatformInputSender:
         if not self.running:
             return
             
-        scaled_x, scaled_y = self._scale_coordinates(x, y)
         event = {
             'type': 'mouse',
             'action': 'scroll',
-            'x': scaled_x,
-            'y': scaled_y,
+            'x': x,
+            'y': y,
             'dx': dx,
             'dy': dy,
             'timestamp': time.time()
@@ -780,16 +781,27 @@ class EdgeLiteClient:
             self.log("   Install with: pip install pynput")
     
     def setup_platform_input(self):
-        """Setup input forwarding"""
+        """Setup input forwarding with proper focus handling"""
         if hasattr(self.video_display, 'video_label'):
-            self.video_display.video_label.bind('<FocusIn>', self.on_video_focus)
-            self.video_display.video_label.bind('<FocusOut>', self.on_video_blur)
+            # Bind focus events to video display
+            self.video_display.video_label.bind('<Enter>', self.on_video_focus)
+            self.video_display.video_label.bind('<Leave>', self.on_video_blur)
+            self.video_display.video_label.bind('<Button-1>', self.on_video_click)
+            
+            # Make video label focusable
+            self.video_display.video_label.focus_set()
     
+    def on_video_click(self, event):
+        """When video display is clicked, focus it"""
+        self.video_display.video_label.focus_set()
+        self.log("🎯 Video display focused - input forwarding active")
+        
     def on_video_focus(self, event):
         """When video display gets focus"""
         if self.connected:
             self.log("🎯 Video display focused - input forwarding active")
             self.log("🖱️  You can now control the host computer")
+            self.log("💡 Click anywhere outside the video to release control")
     
     def on_video_blur(self, event):
         """When video display loses focus"""

@@ -375,8 +375,10 @@ class CrossPlatformInputSender:
         self.pressed_keys = set()
         
         # Client display dimensions for scaling
-        self.client_width = 1920
-        self.client_height = 1080
+        self.display_width = 1920
+        self.display_height = 1080
+        self.stream_width = 1280
+        self.stream_height = 720
         
         self.platform = platform.system().lower()
         self.input_enabled = PYNPUT_AVAILABLE
@@ -386,12 +388,18 @@ class CrossPlatformInputSender:
     
     def set_scaling(self, display_width: int, display_height: int, stream_width: int, stream_height: int):
         """Set scaling for coordinate conversion"""
-        self.client_width = display_width
-        self.client_height = display_height
+        self.display_width = display_width
+        self.display_height = display_height
+        self.stream_width = stream_width
+        self.stream_height = stream_height
+        print(f"Input scaling set: Display {display_width}x{display_height}, Stream {stream_width}x{stream_height}")
     
     def _scale_coordinates(self, x: int, y: int) -> tuple:
         """Scale coordinates from display to stream resolution"""
-        # No scaling needed - send raw coordinates and let host scale
+        if self.display_width > 0 and self.display_height > 0:
+            scaled_x = int(x * self.stream_width / self.display_width)
+            scaled_y = int(y * self.stream_height / self.display_height)
+            return scaled_x, scaled_y
         return x, y
     
     def connect(self, host_ip: str):
@@ -439,10 +447,6 @@ class CrossPlatformInputSender:
         """Send input event to host"""
         if self.socket and self.host_ip and self.running:
             try:
-                # Add client display dimensions for scaling on host side
-                event_data['client_width'] = self.client_width
-                event_data['client_height'] = self.client_height
-                
                 data = json.dumps(event_data).encode('utf-8')
                 self.socket.sendto(data, (self.host_ip, self.control_port))
             except Exception as e:
@@ -455,11 +459,14 @@ class CrossPlatformInputSender:
             
         self.mouse_position = (x, y)
         
+        # Scale coordinates
+        scaled_x, scaled_y = self._scale_coordinates(x, y)
+        
         event = {
             'type': 'mouse',
             'action': 'move',
-            'x': x,
-            'y': y,
+            'x': scaled_x,
+            'y': scaled_y,
             'timestamp': time.time()
         }
         self._send_input_event(event)
@@ -471,12 +478,15 @@ class CrossPlatformInputSender:
             
         button_name = str(button).replace('Button.', '')
         
+        # Scale coordinates
+        scaled_x, scaled_y = self._scale_coordinates(x, y)
+        
         event = {
             'type': 'mouse',
             'action': 'press' if pressed else 'release',
             'button': button_name,
-            'x': x,
-            'y': y,
+            'x': scaled_x,
+            'y': scaled_y,
             'timestamp': time.time()
         }
         self._send_input_event(event)
@@ -486,11 +496,14 @@ class CrossPlatformInputSender:
         if not self.running:
             return
             
+        # Scale coordinates
+        scaled_x, scaled_y = self._scale_coordinates(x, y)
+        
         event = {
             'type': 'mouse',
             'action': 'scroll',
-            'x': x,
-            'y': y,
+            'x': scaled_x,
+            'y': scaled_y,
             'dx': dx,
             'dy': dy,
             'timestamp': time.time()
@@ -875,16 +888,28 @@ class EdgeLiteClient:
             self.connect_btn.config(text="Disconnect")
             self.connection_status.config(text="🟢 CONNECTED", foreground="green")
             
-            # Setup input scaling
-            display_width = self.root.winfo_screenwidth()
-            display_height = self.root.winfo_screenheight()
+            # Setup input scaling with proper dimensions
+            display_width = self.video_display.video_label.winfo_width()
+            display_height = self.video_display.video_label.winfo_height()
+            
+            # If video label dimensions are not available yet, use default
+            if display_width <= 1 or display_height <= 1:
+                display_width = 1280
+                display_height = 720
+            
             stream_config = self.config_manager.stream_config
             self.input_sender.set_scaling(
                 display_width, display_height,
                 stream_config.width,
                 stream_config.height
             )
-            self.input_sender.connect(host_ip)
+            
+            # Start input sender
+            input_success = self.input_sender.connect(host_ip)
+            if input_success:
+                self.log("✅ Input control initialized")
+            else:
+                self.log("⚠️ Input control failed to start")
             
             self.log(f"✅ Successfully connected to {host_ip}")
             if self.ffmpeg_available:

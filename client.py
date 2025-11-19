@@ -96,15 +96,14 @@ class FFmpegVideoReceiver:
         # FFmpeg command to receive UDP stream and decode to raw video
         ffmpeg_cmd = [
             'ffmpeg',
-            '-i', f'udp://{host_ip}:{port}',      # Input UDP stream
-            '-f', 'rawvideo',                     # Output raw video
-            '-pix_fmt', 'bgr24',                  # OpenCV compatible format
-            '-vcodec', 'rawvideo',                # Raw video codec
-            '-timeout', '5000000',                # 5 second timeout
-            '-fflags', 'nobuffer',                # Reduce latency
+            '-i', f'udp://{host_ip}:{port}?timeout=5000000',
+            '-f', 'rawvideo',
+            '-pix_fmt', 'bgr24',
+            '-vcodec', 'rawvideo',
+            '-fflags', 'nobuffer',
             '-flags', 'low_delay',
             '-avioflags', 'direct',
-            'pipe:1'                              # Output to stdout
+            'pipe:1'
         ]
         
         try:
@@ -114,10 +113,14 @@ class FFmpegVideoReceiver:
                 ffmpeg_cmd,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
-                bufsize=frame_size * 5  # Buffer for 5 frames
+                bufsize=frame_size * 5
             )
             
             print("✅ FFmpeg process started successfully")
+            
+            # Start stderr reader thread
+            stderr_thread = threading.Thread(target=self._read_stderr, daemon=True)
+            stderr_thread.start()
             
             while self.running and self.ffmpeg_process.poll() is None:
                 try:
@@ -132,7 +135,7 @@ class FFmpegVideoReceiver:
                     else:
                         # Incomplete frame or no data
                         if len(raw_frame) == 0:
-                            time.sleep(0.001)  # Small sleep to prevent busy waiting
+                            time.sleep(0.001)
                         else:
                             print(f"⚠️ Incomplete frame: {len(raw_frame)}/{frame_size} bytes")
                             
@@ -143,11 +146,20 @@ class FFmpegVideoReceiver:
         except Exception as e:
             print(f"❌ FFmpeg process error: {e}")
             self.connected = False
-            # Create error frame to display
             self._create_error_frame(f"FFmpeg Error: {str(e)}")
         finally:
             if self.ffmpeg_process:
                 self.ffmpeg_process.terminate()
+    
+    def _read_stderr(self):
+        """Read FFmpeg stderr for debugging"""
+        while self.running and self.ffmpeg_process and self.ffmpeg_process.poll() is None:
+            try:
+                line = self.ffmpeg_process.stderr.readline()
+                if line:
+                    print(f"FFmpeg (client): {line.decode().strip()}")
+            except:
+                break
     
     def _handle_decoded_frame(self, frame):
         """Handle successfully decoded frame"""
@@ -183,13 +195,13 @@ class FFmpegVideoReceiver:
             
             # Add error text
             font = cv2.FONT_HERSHEY_SIMPLEX
-            cv2.putText(frame, "EDGELITE CLIENT - FFMPEG MODE", (30, 60), font, 0.7, (255, 255, 255), 2)
+            cv2.putText(frame, "EDGELITE CLIENT", (30, 60), font, 0.7, (255, 255, 255), 2)
             cv2.putText(frame, message, (30, 120), font, 0.6, (255, 255, 255), 1)
             cv2.putText(frame, "Troubleshooting:", (30, 180), font, 0.6, (255, 255, 255), 1)
-            cv2.putText(frame, "1. Check if FFmpeg is installed", (30, 210), font, 0.5, (255, 255, 255), 1)
+            cv2.putText(frame, "1. Check if host is running", (30, 210), font, 0.5, (255, 255, 255), 1)
             cv2.putText(frame, "2. Verify host IP and port", (30, 240), font, 0.5, (255, 255, 255), 1)
             cv2.putText(frame, "3. Check firewall settings", (30, 270), font, 0.5, (255, 255, 255), 1)
-            cv2.putText(frame, "4. Ensure host is streaming", (30, 300), font, 0.5, (255, 255, 255), 1)
+            cv2.putText(frame, "4. Ensure FFmpeg is installed", (30, 300), font, 0.5, (255, 255, 255), 1)
             
             self._handle_decoded_frame(frame)
         except Exception as e:
@@ -258,14 +270,6 @@ class SimpleVideoReceiver:
             self.socket.settimeout(2.0)
             self.socket.bind(('', self.config_manager.network_config.video_port))
             
-            # Send connection request
-            try:
-                handshake = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-                handshake.sendto(b"CONNECT_TEST", (host_ip, self.config_manager.network_config.video_port))
-                handshake.close()
-            except:
-                pass
-            
             self.connected = True
             self.running = True
             
@@ -281,28 +285,18 @@ class SimpleVideoReceiver:
     
     def _receive_loop(self):
         """Simple receive loop that shows connection status"""
-        packet_count = 0
-        last_print = time.time()
-        
         while self.running and self.connected:
             try:
                 data, addr = self.socket.recvfrom(65536)
-                packet_count += 1
-                
-                # Print packet stats every 2 seconds
-                current_time = time.time()
-                if current_time - last_print >= 2.0:
-                    print(f"📦 Receiving packets: {packet_count} packets/2s")
-                    packet_count = 0
-                    last_print = current_time
                 
                 # Create a simple test frame to show we're connected
-                if CV2_AVAILABLE and (self.frame_queue.empty() or packet_count % 30 == 0):
-                    test_frame = self._create_test_frame(packet_count)
+                if CV2_AVAILABLE and self.frame_queue.empty():
+                    test_frame = self._create_test_frame()
                     self.current_frame = test_frame
                     
                     # Update FPS
                     self.frame_count += 1
+                    current_time = time.time()
                     if current_time - self.fps_update_time >= 1.0:
                         self.fps = min(self.frame_count, 30)
                         self.frame_count = 0
@@ -322,7 +316,7 @@ class SimpleVideoReceiver:
                 if self.running:
                     print(f"Receive error: {e}")
     
-    def _create_test_frame(self, packet_count):
+    def _create_test_frame(self):
         """Create a test frame to show we're connected"""
         try:
             # Create a simple colored frame with connection info
@@ -333,10 +327,9 @@ class SimpleVideoReceiver:
             text = "SIMPLE UDP TEST MODE"
             font = cv2.FONT_HERSHEY_SIMPLEX
             cv2.putText(frame, text, (50, 100), font, 0.8, (255, 255, 255), 2)
-            cv2.putText(frame, "✅ Connected to Host", (50, 150), font, 0.6, (255, 255, 255), 1)
-            cv2.putText(frame, f"📦 Receiving UDP packets", (50, 200), font, 0.6, (255, 255, 255), 1)
-            cv2.putText(frame, "⚠️ Using simple receiver (no video)", (50, 250), font, 0.6, (255, 255, 255), 1)
-            cv2.putText(frame, "💡 Install FFmpeg for H.264 video", (50, 300), font, 0.6, (255, 255, 255), 1)
+            cv2.putText(frame, "✅ Receiving UDP packets", (50, 150), font, 0.6, (255, 255, 255), 1)
+            cv2.putText(frame, "⚠️ Using simple receiver (no video)", (50, 200), font, 0.6, (255, 255, 255), 1)
+            cv2.putText(frame, "💡 Install FFmpeg for H.264 video", (50, 250), font, 0.6, (255, 255, 255), 1)
             
             return frame
         except:
@@ -406,6 +399,7 @@ class CrossPlatformInputSender:
         try:
             self.host_ip = host_ip
             self.socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            self.socket.settimeout(1.0)
             
             if self.input_enabled:
                 self._start_input_listeners()
@@ -730,7 +724,7 @@ class EdgeLiteClient:
         control_frame.grid(row=0, column=0, sticky="ew")
         
         ttk.Label(control_frame, text="Host IP:").grid(row=0, column=0, sticky="w", padx=(0, 5))
-        self.host_ip_var = tk.StringVar(value="192.168.0.155")
+        self.host_ip_var = tk.StringVar(value="127.0.0.1")  # Default to localhost for testing
         ip_entry = ttk.Entry(control_frame, textvariable=self.host_ip_var, width=15)
         ip_entry.grid(row=0, column=1, sticky="ew", padx=(0, 5))
         
@@ -776,6 +770,7 @@ class EdgeLiteClient:
             self.log("   Linux: sudo apt install ffmpeg")
         
         self.log("💡 Enter host IP and click Connect")
+        self.log("💡 For testing, use 127.0.0.1 to connect to yourself")
         
         if not CV2_AVAILABLE:
             self.log("❌ WARNING: OpenCV/PIL not installed - video display disabled")
@@ -896,6 +891,7 @@ class EdgeLiteClient:
             error_msg += "• Host IP address is incorrect\n"
             error_msg += "• Host is not running EdgeLite\n"
             error_msg += "• Host firewall is blocking connection\n"
+            error_msg += "• Make sure host has started streaming\n"
             
             if not self.ffmpeg_available:
                 error_msg += "• FFmpeg is not installed on client\n"
